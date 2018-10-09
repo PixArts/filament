@@ -158,6 +158,10 @@ enum_<VertexAttribute>("VertexAttribute")
         .value("HALF3", VertexBuffer::AttributeType::HALF3)
         .value("HALF4", VertexBuffer::AttributeType::HALF4);
 
+ enum_<IndexBuffer::IndexType>("IndexBuffer$IndexType")
+        .value("USHORT", IndexBuffer::IndexType::USHORT)
+        .value("UINT", IndexBuffer::IndexType::UINT);
+
  enum_<RenderableManager::PrimitiveType>("RenderableManager$PrimitiveType")
         .value("POINTS", RenderableManager::PrimitiveType::POINTS)
         .value("LINES", RenderableManager::PrimitiveType::LINES)
@@ -209,6 +213,10 @@ class_<Engine>("Engine")
 
     .function("destroyVertexBuffer", (void (*)(Engine*, VertexBuffer*)) []
             (Engine* engine, VertexBuffer* vb) { engine->destroy(vb); },
+            allow_raw_pointers())
+
+    .function("destroyIndexBuffer", (void (*)(Engine*, IndexBuffer*)) []
+            (Engine* engine, IndexBuffer* ib) { engine->destroy(ib); },
             allow_raw_pointers());
 
 class_<SwapChain>("SwapChain");
@@ -227,30 +235,34 @@ class_<Camera>("Camera");
 
 class_<RenderBuilder>("RenderableManager$Builder")
 
-    .function("build", (void (*)(RenderBuilder*, Engine*, utils::Entity)) []
-            (RenderBuilder* builder, Engine* engine, utils::Entity entity) {
+    .function("build", EMBIND_LAMBDA(void, (RenderBuilder* builder,
+            Engine* engine, utils::Entity entity), {
         builder->build(*engine, entity);
-    }, allow_raw_pointers())
+    }), allow_raw_pointers())
 
-    .function("boundingBox", (RenderBuilder* (*)(RenderBuilder*, Box)) []
-            (RenderBuilder* builder, Box box) {
+    .BUILDER_FUNCTION("boundingBox", RenderBuilder, (RenderBuilder* builder, Box box), {
         return &builder->boundingBox(box);
-    }, allow_raw_pointers())
+    })
 
-    .function("culling", (RenderBuilder* (*)(RenderBuilder*, bool)) []
-            (RenderBuilder* builder, bool enable) {
+    .BUILDER_FUNCTION("culling", RenderBuilder, (RenderBuilder* builder, bool enable), {
         return &builder->culling(enable);
-    }, allow_raw_pointers())
+    })
 
-    .function("receiveShadows", (RenderBuilder* (*)(RenderBuilder*, bool)) []
-            (RenderBuilder* builder, bool enable) {
+    .BUILDER_FUNCTION("receiveShadows", RenderBuilder, (RenderBuilder* builder, bool enable), {
         return &builder->receiveShadows(enable);
-    }, allow_raw_pointers())
+    })
 
-    .function("castShadows", (RenderBuilder* (*)(RenderBuilder*, bool)) []
-            (RenderBuilder* builder, bool enable) {
+    .BUILDER_FUNCTION("castShadows", RenderBuilder, (RenderBuilder* builder, bool enable), {
         return &builder->castShadows(enable);
-    }, allow_raw_pointers());
+    })
+
+    .BUILDER_FUNCTION("geometry", RenderBuilder, (RenderBuilder* builder,
+            size_t index,
+            RenderableManager::PrimitiveType type,
+            VertexBuffer* vertices,
+            IndexBuffer* indices), {
+        return &builder->geometry(index, type, vertices, indices);
+    });
 
 class_<RenderableManager>("RenderableManager")
     .class_function("Builder", (RenderBuilder (*)(int)) []
@@ -292,13 +304,26 @@ class_<VertexBuffer>("VertexBuffer")
     }), allow_raw_pointers());
 
 class_<IndexBuilder>("IndexBuffer$Builder")
-    .function("build", (void (*)(IndexBuilder*, Engine*)) []
-            (IndexBuilder* builder, Engine* engine) {
-        builder->build(*engine);
-    }, allow_raw_pointers());
+
+    .function("build", EMBIND_LAMBDA(IndexBuffer*, (IndexBuilder* builder, Engine* engine), {
+        return builder->build(*engine);
+    }), allow_raw_pointers())
+
+    .BUILDER_FUNCTION("indexCount", IndexBuilder, (IndexBuilder* builder, int count), {
+        return &builder->indexCount(count);
+    })
+
+    .BUILDER_FUNCTION("bufferType", IndexBuilder, (IndexBuilder* builder,
+            IndexBuffer::IndexType indexType), {
+        return &builder->bufferType(indexType);
+    });
 
 class_<IndexBuffer>("IndexBuffer")
-    .class_function("Builder", (IndexBuilder (*)()) [] () { return IndexBuilder(); });
+    .class_function("Builder", (IndexBuilder (*)()) [] () { return IndexBuilder(); })
+    .function("setBuffer", EMBIND_LAMBDA(void, (IndexBuffer* self,
+            Engine* engine, BufferDescriptor ibd), {
+        self->setBuffer(*engine, std::move(*ibd.bd));
+    }), allow_raw_pointers());
 
 // UTILS CLASSES
 
