@@ -44,15 +44,21 @@
 
 #include <utils/EntityManager.h>
 
+#include <emscripten.h>
 #include <emscripten/bind.h>
 
 using namespace emscripten;
 using namespace filament;
 
-#define BUILDER_LAMBDA(retval, arglist, impl) (retval (*) arglist) [] arglist impl
+// Many of our methods require a thin layer of C++ glue which is elegantly expressed with a lambda.
+// However, passing a bare lambda into embind's daisy chain requires a cast to a function pointer,
+// hence this macro.
+#define EMBIND_LAMBDA(retval, arglist, impl) (retval (*) arglist) [] arglist impl
 
+// Builder functions that return "this" have verbose binding declarations, this macro reduces
+// the amount of boilerplate.
 #define BUILDER_FUNCTION(name, btype, arglist, impl) \
-        function(name, BUILDER_LAMBDA(btype*, arglist, impl), allow_raw_pointers())
+        function(name, EMBIND_LAMBDA(btype*, arglist, impl), allow_raw_pointers())
 
 namespace {
 
@@ -62,38 +68,60 @@ using RenderBuilder = RenderableManager::Builder;
 using VertexBuilder = VertexBuffer::Builder;
 using IndexBuilder = IndexBuffer::Builder;
 
-}
+// We avoid directly exposing driver::BufferDescriptor because embind does not support move
+// semantics. Moreover we need extra control in order to efficiently handle typed arrays.
+// This little wrapper class is exposed to JavaScript as "driver$BufferDescriptor", but clients will
+// normally use our "Filament.BufferDescriptor" helper function, which we implement in the post-js.
+struct BufferDescriptor {
+    BufferDescriptor(val arrdata) {
+        auto byteLength = arrdata["byteLength"].as<uint32_t>();
+        this->bd = new driver::BufferDescriptor(malloc(byteLength), byteLength,
+                [](void* buffer, size_t size, void* user) { free(buffer); });
+    }
+    val getBytes() {
+        unsigned char *byteBuffer = (unsigned char*) bd->buffer;
+        size_t bufferLength = bd->size;
+        return val(typed_memory_view(bufferLength, byteBuffer));
+    };
+    driver::BufferDescriptor* bd;
+};
+
+} // anonymous namespace
+
+EMSCRIPTEN_BINDINGS(array_types) {
+
+class_<BufferDescriptor>("driver$BufferDescriptor")
+    .constructor<emscripten::val>()
+    .function("getBytes", &BufferDescriptor::getBytes);
+
+// MATH TYPES
 
 // Individual JavaScript objects for math types would be too heavy, so instead we simply accept
 // array-like data using embind's "value_array" feature. We do not expose all our math functions
 // under the assumption that JS clients will use glMatrix or something similar for math.
 
-EMSCRIPTEN_BINDINGS(array_types) {
+value_array<math::float2>("float2")
+    .element(&math::float2::x)
+    .element(&math::float2::y);
 
-    value_array<math::float2>("float2")
-        .element(&math::float2::x)
-        .element(&math::float2::y);
+value_array<math::float3>("float3")
+    .element(&math::float3::x)
+    .element(&math::float3::y)
+    .element(&math::float3::z);
 
-    value_array<math::float3>("float3")
-        .element(&math::float3::x)
-        .element(&math::float3::y)
-        .element(&math::float3::z);
+value_array<math::float4>("float4")
+    .element(&math::float4::x)
+    .element(&math::float4::y)
+    .element(&math::float4::z)
+    .element(&math::float4::w);
 
-    value_array<math::float4>("float4")
-        .element(&math::float4::x)
-        .element(&math::float4::y)
-        .element(&math::float4::z)
-        .element(&math::float4::w);
+value_array<Box>("Box")
+    .element(&Box::center)
+    .element(&Box::halfExtent);
 
-    value_array<Box>("Box")
-        .element(&Box::center)
-        .element(&Box::halfExtent);
+// CONSTANTS and ENUMS
 
-}
-
-EMSCRIPTEN_BINDINGS(constants) {
-
- enum_<VertexAttribute>("VertexAttribute")
+enum_<VertexAttribute>("VertexAttribute")
         .value("POSITION", POSITION)
         .value("TANGENTS", TANGENTS)
         .value("COLOR", COLOR)
@@ -135,160 +163,151 @@ EMSCRIPTEN_BINDINGS(constants) {
         .value("LINES", RenderableManager::PrimitiveType::LINES)
         .value("TRIANGLES", RenderableManager::PrimitiveType::TRIANGLES)
         .value("NONE", RenderableManager::PrimitiveType::NONE);
-}
 
-EMSCRIPTEN_BINDINGS(core_types) {
+// CORE FILAMENT CLASSES
 
-    // Engine
-    class_<Engine>("Engine")
+class_<Engine>("Engine")
 
-        .class_function("create", (Engine* (*)()) [] () { return Engine::create(); },
-                allow_raw_pointers())
-        .class_function("destroy", (void (*)(Engine*)) []
-                (Engine* engine) { Engine::destroy(&engine); }, allow_raw_pointers())
+    .class_function("create", (Engine* (*)()) [] () { return Engine::create(); },
+            allow_raw_pointers())
+    .class_function("destroy", (void (*)(Engine*)) []
+            (Engine* engine) { Engine::destroy(&engine); }, allow_raw_pointers())
 
-        .class_function("destroy", &Engine::destroy, allow_raw_pointers())
+    .class_function("destroy", &Engine::destroy, allow_raw_pointers())
 
-        .function("createSwapChain", (SwapChain* (*)(Engine*)) []
-                (Engine* engine) { return engine->createSwapChain(nullptr); },
-                allow_raw_pointers())
-        .function("destroySwapChain", (void (*)(Engine*, SwapChain*)) []
-                (Engine* engine, SwapChain* swapChain) { engine->destroy(swapChain); },
-                allow_raw_pointers())
+    .function("createSwapChain", (SwapChain* (*)(Engine*)) []
+            (Engine* engine) { return engine->createSwapChain(nullptr); },
+            allow_raw_pointers())
+    .function("destroySwapChain", (void (*)(Engine*, SwapChain*)) []
+            (Engine* engine, SwapChain* swapChain) { engine->destroy(swapChain); },
+            allow_raw_pointers())
 
-        .function("createRenderer", &Engine::createRenderer, allow_raw_pointers())
-        .function("destroyRenderer", (void (*)(Engine*, Renderer*)) []
-                (Engine* engine, Renderer* renderer) { engine->destroy(renderer); },
-                allow_raw_pointers())
+    .function("createRenderer", &Engine::createRenderer, allow_raw_pointers())
+    .function("destroyRenderer", (void (*)(Engine*, Renderer*)) []
+            (Engine* engine, Renderer* renderer) { engine->destroy(renderer); },
+            allow_raw_pointers())
 
-        .function("createView", &Engine::createView, allow_raw_pointers())
-        .function("destroyView", (void (*)(Engine*, View*)) []
-                (Engine* engine, View* view) { engine->destroy(view); },
-                allow_raw_pointers())
+    .function("createView", &Engine::createView, allow_raw_pointers())
+    .function("destroyView", (void (*)(Engine*, View*)) []
+            (Engine* engine, View* view) { engine->destroy(view); },
+            allow_raw_pointers())
 
-        .function("createScene", &Engine::createScene, allow_raw_pointers())
-        .function("destroyScene", (void (*)(Engine*, Scene*)) []
-                (Engine* engine, Scene* scene) { engine->destroy(scene); },
-                allow_raw_pointers())
+    .function("createScene", &Engine::createScene, allow_raw_pointers())
+    .function("destroyScene", (void (*)(Engine*, Scene*)) []
+            (Engine* engine, Scene* scene) { engine->destroy(scene); },
+            allow_raw_pointers())
 
-        .function("createCamera", select_overload<Camera*(void)>(&Engine::createCamera),
-                allow_raw_pointers())
-        .function("destroyCamera", (void (*)(Engine*, Camera*)) []
-                (Engine* engine, Camera* camera) { engine->destroy(camera); },
-                allow_raw_pointers())
+    .function("createCamera", select_overload<Camera*(void)>(&Engine::createCamera),
+            allow_raw_pointers())
+    .function("destroyCamera", (void (*)(Engine*, Camera*)) []
+            (Engine* engine, Camera* camera) { engine->destroy(camera); },
+            allow_raw_pointers())
 
-        .function("destroyEntity", (void (*)(Engine*, utils::Entity)) []
-                (Engine* engine, utils::Entity entity) { engine->destroy(entity); },
-                allow_raw_pointers())
+    .function("destroyEntity", (void (*)(Engine*, utils::Entity)) []
+            (Engine* engine, utils::Entity entity) { engine->destroy(entity); },
+            allow_raw_pointers())
 
-        .function("destroyVertexBuffer", (void (*)(Engine*, VertexBuffer*)) []
-                (Engine* engine, VertexBuffer* vb) { engine->destroy(vb); },
-                allow_raw_pointers());
+    .function("destroyVertexBuffer", (void (*)(Engine*, VertexBuffer*)) []
+            (Engine* engine, VertexBuffer* vb) { engine->destroy(vb); },
+            allow_raw_pointers());
 
-    // SwapChain
-    class_<SwapChain>("SwapChain");
+class_<SwapChain>("SwapChain");
 
-    // Renderer
-    class_<Renderer>("Renderer")
-        .function("render", &Renderer::render, allow_raw_pointers());
+class_<Renderer>("Renderer")
+    .function("render", &Renderer::render, allow_raw_pointers());
 
-    // View
-    class_<View>("View")
-        .function("setScene", &View::setScene, allow_raw_pointers())
-        .function("setCamera", &View::setCamera, allow_raw_pointers());
+class_<View>("View")
+    .function("setScene", &View::setScene, allow_raw_pointers())
+    .function("setCamera", &View::setCamera, allow_raw_pointers());
 
-    // Scene
-    class_<Scene>("Scene")
-        .function("addEntity", &Scene::addEntity);
+class_<Scene>("Scene")
+    .function("addEntity", &Scene::addEntity);
 
-    // Camera
-    class_<Camera>("Camera");
+class_<Camera>("Camera");
 
-    // RenderableManager
-    class_<RenderBuilder>("RenderableManager$Builder")
+class_<RenderBuilder>("RenderableManager$Builder")
 
-        .function("build", (void (*)(RenderBuilder*, Engine*, utils::Entity)) []
-                (RenderBuilder* builder, Engine* engine, utils::Entity entity) {
-            builder->build(*engine, entity);
-        }, allow_raw_pointers())
+    .function("build", (void (*)(RenderBuilder*, Engine*, utils::Entity)) []
+            (RenderBuilder* builder, Engine* engine, utils::Entity entity) {
+        builder->build(*engine, entity);
+    }, allow_raw_pointers())
 
-        .function("boundingBox", (RenderBuilder* (*)(RenderBuilder*, Box)) []
-                (RenderBuilder* builder, Box box) {
-            return &builder->boundingBox(box);
-        }, allow_raw_pointers())
+    .function("boundingBox", (RenderBuilder* (*)(RenderBuilder*, Box)) []
+            (RenderBuilder* builder, Box box) {
+        return &builder->boundingBox(box);
+    }, allow_raw_pointers())
 
-        .function("culling", (RenderBuilder* (*)(RenderBuilder*, bool)) []
-                (RenderBuilder* builder, bool enable) {
-            return &builder->culling(enable);
-        }, allow_raw_pointers())
+    .function("culling", (RenderBuilder* (*)(RenderBuilder*, bool)) []
+            (RenderBuilder* builder, bool enable) {
+        return &builder->culling(enable);
+    }, allow_raw_pointers())
 
-        .function("receiveShadows", (RenderBuilder* (*)(RenderBuilder*, bool)) []
-                (RenderBuilder* builder, bool enable) {
-            return &builder->receiveShadows(enable);
-        }, allow_raw_pointers())
+    .function("receiveShadows", (RenderBuilder* (*)(RenderBuilder*, bool)) []
+            (RenderBuilder* builder, bool enable) {
+        return &builder->receiveShadows(enable);
+    }, allow_raw_pointers())
 
-        .function("castShadows", (RenderBuilder* (*)(RenderBuilder*, bool)) []
-                (RenderBuilder* builder, bool enable) {
-            return &builder->castShadows(enable);
-        }, allow_raw_pointers());
+    .function("castShadows", (RenderBuilder* (*)(RenderBuilder*, bool)) []
+            (RenderBuilder* builder, bool enable) {
+        return &builder->castShadows(enable);
+    }, allow_raw_pointers());
 
-    class_<RenderableManager>("RenderableManager")
-        .class_function("Builder", (RenderBuilder (*)(int)) []
-            (int n) { return RenderBuilder(n); });
+class_<RenderableManager>("RenderableManager")
+    .class_function("Builder", (RenderBuilder (*)(int)) []
+        (int n) { return RenderBuilder(n); });
 
-    // VertexBuffer
-    class_<VertexBuilder>("VertexBuffer$Builder")
+class_<VertexBuilder>("VertexBuffer$Builder")
 
-        .function("build", BUILDER_LAMBDA(VertexBuffer*, (VertexBuilder* builder, Engine* engine), {
-            return builder->build(*engine);
-        }), allow_raw_pointers())
+    .function("build", EMBIND_LAMBDA(VertexBuffer*, (VertexBuilder* builder, Engine* engine), {
+        return builder->build(*engine);
+    }), allow_raw_pointers())
 
-        .BUILDER_FUNCTION("attribute", VertexBuilder, (VertexBuilder* builder,
-                VertexAttribute attr,
-                uint8_t bufferIndex,
-                VertexBuffer::AttributeType attrType,
-                uint8_t byteOffset,
-                uint8_t byteStride), {
-            return &builder->attribute(attr, bufferIndex, attrType, byteOffset, byteStride);
-        })
+    .BUILDER_FUNCTION("attribute", VertexBuilder, (VertexBuilder* builder,
+            VertexAttribute attr,
+            uint8_t bufferIndex,
+            VertexBuffer::AttributeType attrType,
+            uint8_t byteOffset,
+            uint8_t byteStride), {
+        return &builder->attribute(attr, bufferIndex, attrType, byteOffset, byteStride);
+    })
 
-        .BUILDER_FUNCTION("vertexCount", VertexBuilder, (VertexBuilder* builder, int count), {
-            return &builder->vertexCount(count);
-        })
+    .BUILDER_FUNCTION("vertexCount", VertexBuilder, (VertexBuilder* builder, int count), {
+        return &builder->vertexCount(count);
+    })
 
-        .BUILDER_FUNCTION("normalized", VertexBuilder, (VertexBuilder* builder,
-                VertexAttribute attrib), {
-            return &builder->normalized(attrib);
-        })
+    .BUILDER_FUNCTION("normalized", VertexBuilder, (VertexBuilder* builder,
+            VertexAttribute attrib), {
+        return &builder->normalized(attrib);
+    })
 
-        .BUILDER_FUNCTION("bufferCount", VertexBuilder, (VertexBuilder* builder, int count), {
-            return &builder->bufferCount(count);
-        });
+    .BUILDER_FUNCTION("bufferCount", VertexBuilder, (VertexBuilder* builder, int count), {
+        return &builder->bufferCount(count);
+    });
 
-    class_<VertexBuffer>("VertexBuffer")
-        .class_function("Builder", (VertexBuilder (*)()) [] () { return VertexBuilder(); });
+class_<VertexBuffer>("VertexBuffer")
+    .class_function("Builder", (VertexBuilder (*)()) [] () { return VertexBuilder(); })
+    .function("setBufferAt", EMBIND_LAMBDA(void, (VertexBuffer* self,
+            Engine* engine, uint8_t bufferIndex, BufferDescriptor vbd), {
+        self->setBufferAt(*engine, bufferIndex, std::move(*vbd.bd));
+    }), allow_raw_pointers());
 
-    // IndexBuffer
-    class_<IndexBuilder>("IndexBuffer$Builder")
-        .function("build", (void (*)(IndexBuilder*, Engine*)) []
-                (IndexBuilder* builder, Engine* engine) {
-            builder->build(*engine);
-        }, allow_raw_pointers());
+class_<IndexBuilder>("IndexBuffer$Builder")
+    .function("build", (void (*)(IndexBuilder*, Engine*)) []
+            (IndexBuilder* builder, Engine* engine) {
+        builder->build(*engine);
+    }, allow_raw_pointers());
 
-    class_<IndexBuffer>("IndexBuffer")
-        .class_function("Builder", (IndexBuilder (*)()) [] () { return IndexBuilder(); });
+class_<IndexBuffer>("IndexBuffer")
+    .class_function("Builder", (IndexBuilder (*)()) [] () { return IndexBuilder(); });
 
-}
+// UTILS CLASSES
 
-EMSCRIPTEN_BINDINGS(utils) {
+class_<utils::Entity>("Entity");
 
-    // Entity
-    class_<utils::Entity>("Entity");
+class_<utils::EntityManager>("EntityManager")
+    .class_function("get", (utils::EntityManager* (*)()) []
+        () { return &utils::EntityManager::get(); }, allow_raw_pointers())
+    .function("create", select_overload<utils::Entity()>(&utils::EntityManager::create))
+    .function("destroy", select_overload<void(utils::Entity)>(&utils::EntityManager::destroy));
 
-    // EntityManager
-    class_<utils::EntityManager>("EntityManager")
-        .class_function("get", (utils::EntityManager* (*)()) []
-            () { return &utils::EntityManager::get(); }, allow_raw_pointers())
-        .function("create", select_overload<utils::Entity()>(&utils::EntityManager::create))
-        .function("destroy", select_overload<void(utils::Entity)>(&utils::EntityManager::destroy));
-}
+} // EMSCRIPTEN_BINDINGS
