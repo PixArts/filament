@@ -49,6 +49,11 @@
 using namespace emscripten;
 using namespace filament;
 
+#define BUILDER_LAMBDA(retval, arglist, impl) (retval (*) arglist) [] arglist impl
+
+#define BUILDER_FUNCTION(name, btype, arglist, impl) \
+        function(name, BUILDER_LAMBDA(btype*, arglist, impl), allow_raw_pointers())
+
 namespace {
 
 // For convenience, declare terse private aliases to nested types. This lets us avoid extremely
@@ -232,36 +237,33 @@ EMSCRIPTEN_BINDINGS(core_types) {
             (int n) { return RenderBuilder(n); });
 
     // VertexBuffer
-
-#define VERTEX_BUILDER_METHOD(arglist, impl) (VertexBuilder* (*) arglist) [] arglist impl
-
     class_<VertexBuilder>("VertexBuffer$Builder")
 
-        .function("build", (void (*)(VertexBuilder*, Engine*)) []
-                (VertexBuilder* builder, Engine* engine) {
-            builder->build(*engine);
-        }, allow_raw_pointers())
+        .function("build", BUILDER_LAMBDA(VertexBuffer*, (VertexBuilder* builder, Engine* engine), {
+            return builder->build(*engine);
+        }), allow_raw_pointers())
 
-        .function("attribute", (VertexBuilder* (*)
-                (VertexBuilder* builder, VertexAttribute attr, uint8_t, VertexBuffer::AttributeType, uint8_t, uint8_t)) []
-                (VertexBuilder* builder, VertexAttribute attr, uint8_t bufferIndex, VertexBuffer::AttributeType attrType, uint8_t byteOffset, uint8_t byteStride) {
+        .BUILDER_FUNCTION("attribute", VertexBuilder, (VertexBuilder* builder,
+                VertexAttribute attr,
+                uint8_t bufferIndex,
+                VertexBuffer::AttributeType attrType,
+                uint8_t byteOffset,
+                uint8_t byteStride), {
             return &builder->attribute(attr, bufferIndex, attrType, byteOffset, byteStride);
-        }, allow_raw_pointers())
+        })
 
-        .function("vertexCount", (VertexBuilder* (*)(VertexBuilder*, int)) []
-                (VertexBuilder* builder, int count) {
+        .BUILDER_FUNCTION("vertexCount", VertexBuilder, (VertexBuilder* builder, int count), {
             return &builder->vertexCount(count);
-        }, allow_raw_pointers())
+        })
 
-        .function("normalized", (VertexBuilder* (*)(VertexBuilder*, VertexAttribute)) []
-                (VertexBuilder* builder, VertexAttribute attrib) {
+        .BUILDER_FUNCTION("normalized", VertexBuilder, (VertexBuilder* builder,
+                VertexAttribute attrib), {
             return &builder->normalized(attrib);
-        }, allow_raw_pointers())
+        })
 
-        .function("bufferCount", (VertexBuilder* (*)(VertexBuilder*, int)) []
-                (VertexBuilder* builder, int count) {
+        .BUILDER_FUNCTION("bufferCount", VertexBuilder, (VertexBuilder* builder, int count), {
             return &builder->bufferCount(count);
-        }, allow_raw_pointers());
+        });
 
     class_<VertexBuffer>("VertexBuffer")
         .class_function("Builder", (VertexBuilder (*)()) [] () { return VertexBuilder(); });
